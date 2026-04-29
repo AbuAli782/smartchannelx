@@ -42,6 +42,13 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
 
 
+import os
+
+async def handle_dummy_web(reader, writer):
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+    await writer.drain()
+    writer.close()
+
 async def post_init(app: Application) -> None:
     await db.init_db()
     register_all(app)
@@ -49,6 +56,15 @@ async def post_init(app: Application) -> None:
     await restore_jobs(app)
     me = await app.bot.get_me()
     log.info("SmartChannelX bot started as @%s (id=%s)", me.username, me.id)
+    
+    # Start dummy web server for Render Web Service
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        server = await asyncio.start_server(handle_dummy_web, '0.0.0.0', port)
+        asyncio.create_task(server.serve_forever())
+        log.info(f"Dummy web server listening on port {port} for Render")
+    except Exception as e:
+        log.warning(f"Failed to start dummy server: {e}")
 
 
 async def post_shutdown(app: Application) -> None:
