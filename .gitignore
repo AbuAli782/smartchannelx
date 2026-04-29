@@ -1,0 +1,6 @@
+.env
+smartchannelx.db
+smartchannelx.db-wal
+smartchannelx.db-shm
+__pycache__/
+*.pyc
