@@ -102,13 +102,20 @@ def _format_perms(verify: dict, lang: str) -> str:
 
 async def cb_list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
-    await q.answer()
     lang = await get_user_language(update)
     user = update.effective_user
     channels = await db.list_user_channels(user.id)
+    
     if not channels:
-        await q.edit_message_text(t(lang, "no_channels"), reply_markup=kb.welcome_kb(lang))
+        current_text = q.message.text if q.message else ""
+        if t(lang, "no_channels").split("\n")[0] in current_text:
+            await q.answer(t(lang, "no_channels_global"), show_alert=True)
+        else:
+            await q.answer()
+            await q.edit_message_text(t(lang, "no_channels"), reply_markup=kb.welcome_kb(lang))
         return
+
+    await q.answer()
     # Live verify each channel in parallel for status badges.
     statuses: dict[int, str] = {}
     results = await asyncio.gather(
