@@ -30,6 +30,10 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err_str = str(context.error)
     if err_str in ("None", ""):
         return
+    
+    if "Message is not modified" in err_str:
+        return
+
     log.exception("Update %s caused error: %s", update, err_str)
     try:
         await db.log_error("ERROR", err_str[:1500])
