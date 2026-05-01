@@ -57,14 +57,96 @@ async def cb_toggle_block_bots(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text(text, reply_markup=kb.protection_menu_kb(lang, channel))
 
 
+async def cb_toggle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    lang = await get_user_language(update)
+    channel_id = int(q.data.split(":")[2])
+    channel = await db.get_channel(channel_id)
+    new_val = 0 if channel.get("anti_spam_enabled") else 1
+    await db.update_channel_field(channel_id, "anti_spam_enabled", new_val)
+    state = t(lang, "state_on") if new_val else t(lang, "state_off")
+    await q.answer(t(lang, "saved") + f" ({state})", show_alert=False)
+    channel = await db.get_channel(channel_id)
+    title = channel.get("title") or str(channel["telegram_chat_id"])
+    text = f"{t(lang, 'protection_title', name=title)}\n\n{t(lang, 'protection_body')}"
+    await q.edit_message_text(text, reply_markup=kb.protection_menu_kb(lang, channel))
+
+
+async def cb_toggle_anti_links(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    lang = await get_user_language(update)
+    channel_id = int(q.data.split(":")[2])
+    channel = await db.get_channel(channel_id)
+    new_val = 0 if channel.get("anti_link_enabled") else 1
+    await db.update_channel_field(channel_id, "anti_link_enabled", new_val)
+    state = t(lang, "state_on") if new_val else t(lang, "state_off")
+    await q.answer(t(lang, "saved") + f" ({state})", show_alert=False)
+    channel = await db.get_channel(channel_id)
+    title = channel.get("title") or str(channel["telegram_chat_id"])
+    text = f"{t(lang, 'protection_title', name=title)}\n\n{t(lang, 'protection_body')}"
+    await q.edit_message_text(text, reply_markup=kb.protection_menu_kb(lang, channel))
+
+
+async def cb_punishments_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    lang = await get_user_language(update)
+    channel_id = int(q.data.split(":")[2])
+    channel = await db.get_channel(channel_id)
+    if not channel:
+        return
+    max_w = channel.get("max_warnings") or 3
+    action = channel.get("warn_action") or 1
+    
+    act_str = {1: t(lang, "prot_action_mute"), 2: t(lang, "prot_action_kick"), 3: t(lang, "prot_action_ban")}.get(action, "Mute")
+    
+    text = t(lang, "prot_punish_title", max_warn=max_w, action=act_str)
+    await q.edit_message_text(text, reply_markup=kb.protection_punishment_kb(lang, channel_id, max_w, action))
+
+
+async def cb_punishment_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    lang = await get_user_language(update)
+    parts = q.data.split(":")
+    val = int(parts[3])
+    channel_id = int(parts[4])
+    await db.update_channel_field(channel_id, "max_warnings", val)
+    channel = await db.get_channel(channel_id)
+    max_w = channel.get("max_warnings") or 3
+    action = channel.get("warn_action") or 1
+    act_str = {1: t(lang, "prot_action_mute"), 2: t(lang, "prot_action_kick"), 3: t(lang, "prot_action_ban")}.get(action, "Mute")
+    text = t(lang, "prot_punish_title", max_warn=max_w, action=act_str)
+    await q.edit_message_text(text, reply_markup=kb.protection_punishment_kb(lang, channel_id, max_w, action))
+
+
+async def cb_punishment_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    lang = await get_user_language(update)
+    parts = q.data.split(":")
+    val = int(parts[3])
+    channel_id = int(parts[4])
+    await db.update_channel_field(channel_id, "warn_action", val)
+    channel = await db.get_channel(channel_id)
+    max_w = channel.get("max_warnings") or 3
+    action = channel.get("warn_action") or 1
+    act_str = {1: t(lang, "prot_action_mute"), 2: t(lang, "prot_action_kick"), 3: t(lang, "prot_action_ban")}.get(action, "Mute")
+    text = t(lang, "prot_punish_title", max_warn=max_w, action=act_str)
+    await q.edit_message_text(text, reply_markup=kb.protection_punishment_kb(lang, channel_id, max_w, action))
+
+
 async def cb_join_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     lang = await get_user_language(update)
     channel_id = int(q.data.split(":")[2])
+    channel = await db.get_channel(channel_id)
     await q.edit_message_text(
         t(lang, "join_filters_title"),
-        reply_markup=kb.join_filters_kb(lang, channel_id),
+        reply_markup=kb.join_filters_kb(lang, channel),
     )
 
 
@@ -219,14 +301,142 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
 
 
+async def message_protection_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Monitors messages in channels/groups for anti-spam, anti-links, and banned words."""
+    msg = update.message
+    if not msg or not update.effective_chat or not update.effective_user:
+        return
+    
+    # We only care about groups/supergroups for standard protection (or channel comments if linked)
+    if update.effective_chat.type not in ("group", "supergroup", "channel"):
+        return
+
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    
+    # Ignore bot itself and other bots if not completely blocked
+    if user.is_bot:
+        return
+        
+    # Get channel settings
+    channel = await db.get_channel_by_telegram_id(chat_id)
+    if not channel:
+        return
+        
+    # Don't punish admins
+    try:
+        member = await context.bot.get_chat_member(chat_id, user.id)
+        if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+            return
+    except Exception:
+        return
+        
+    text = (msg.text or msg.caption or "").lower()
+    delete = False
+    reason = None
+    lang = channel.get("language", "ar")
+    
+    # Check Anti-Links
+    if channel.get("anti_link_enabled"):
+        if "http://" in text or "https://" in text or "t.me/" in text or "telegram.me/" in text:
+            delete = True
+            reason = "link"
+            
+    # Check Banned Words
+    if not delete and channel.get("banned_words"):
+        banned = json.loads(channel["banned_words"])
+        if any(w.lower() in text for w in banned):
+            delete = True
+            reason = "word"
+            
+    # Check Anti-Spam (Very basic implementation: same user sending >3 messages in 5 seconds)
+    if not delete and channel.get("anti_spam_enabled"):
+        now = update.message.date.timestamp()
+        key = f"spam_{chat_id}_{user.id}"
+        history = context.bot_data.get(key, [])
+        history = [t for t in history if now - t < 5]
+        history.append(now)
+        context.bot_data[key] = history
+        if len(history) > 3:
+            delete = True
+            reason = "spam"
+            
+    if delete:
+        try:
+            await msg.delete()
+        except Exception:
+            pass # No delete permission
+            
+        await db.add_user_warning(channel["id"], user.id, reason)
+        warns = await db.get_user_warnings_count(channel["id"], user.id)
+        max_warns = channel.get("max_warnings") or 3
+        
+        user_name = user.first_name or user.username or str(user.id)
+        if reason == "link":
+            warn_msg = t(lang, "prot_warn_msg_link", user=user_name, warns=warns, max=max_warns)
+        elif reason == "word":
+            warn_msg = t(lang, "prot_warn_msg_word", user=user_name, warns=warns, max=max_warns)
+        else:
+            warn_msg = t(lang, "prot_warn_msg_spam", user=user_name, warns=warns, max=max_warns)
+            
+        if warns >= max_warns:
+            # Punish
+            action = channel.get("warn_action") or 1
+            act_str = t(lang, "prot_action_mute")
+            try:
+                if action == 1: # Mute
+                    from telegram import ChatPermissions
+                    await context.bot.restrict_chat_member(chat_id, user.id, ChatPermissions(can_send_messages=False))
+                    act_str = t(lang, "prot_action_mute")
+                elif action == 2: # Kick
+                    await context.bot.ban_chat_member(chat_id, user.id)
+                    await context.bot.unban_chat_member(chat_id, user.id)
+                    act_str = t(lang, "prot_action_kick")
+                elif action == 3: # Ban
+                    await context.bot.ban_chat_member(chat_id, user.id)
+                    act_str = t(lang, "prot_action_ban")
+                    
+                await db.clear_user_warnings(channel["id"], user.id)
+                punish_msg = t(lang, "prot_punish_applied", user=user_name, action=act_str)
+                await context.bot.send_message(chat_id, punish_msg)
+            except Exception:
+                pass
+        else:
+            # Just warn
+            try:
+                sent = await context.bot.send_message(chat_id, warn_msg)
+                # Auto delete warning after 10 seconds
+                import asyncio
+                asyncio.create_task(delete_later(context.bot, chat_id, sent.message_id, 10))
+            except Exception:
+                pass
+
+async def delete_later(bot, chat_id, message_id, delay):
+    import asyncio
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
 def register(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_protection_menu, pattern=r"^prot:menu:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_toggle_captcha, pattern=r"^prot:captcha:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_toggle_block_bots, pattern=r"^prot:bots:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_join_filters, pattern=r"^prot:joinf:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_toggle_anti_spam, pattern=r"^prot:spam:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_toggle_anti_links, pattern=r"^prot:links:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_punishments_menu, pattern=r"^prot:punish:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_punishment_warn, pattern=r"^prot:p:w:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_punishment_action, pattern=r"^prot:p:a:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_filter_names, pattern=r"^prot:jf:names:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_filter_names_enable, pattern=r"^prot:names_enable:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_filter_names_disable, pattern=r"^prot:names_disable:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_filter_simple, pattern=r"^prot:jf:(total|multi|alpha):\d+$"))
     app.add_handler(CallbackQueryHandler(cb_word_filter, pattern=r"^prot:words:\d+$"))
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))
+    
+    from telegram.ext import MessageHandler, filters
+    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, message_protection_handler), group=2)
+

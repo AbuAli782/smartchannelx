@@ -24,9 +24,15 @@ log = logging.getLogger("smartchannelx")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.exception("Update %s caused error", update)
+    # Skip harmless NoneType errors caused by internal PTB update processing
+    if context.error is None:
+        return
+    err_str = str(context.error)
+    if err_str in ("None", ""):
+        return
+    log.exception("Update %s caused error: %s", update, err_str)
     try:
-        await db.log_error("ERROR", str(context.error)[:1500])
+        await db.log_error("ERROR", err_str[:1500])
     except Exception:
         pass
     if isinstance(update, Update) and update.effective_chat:
@@ -87,7 +93,7 @@ def main() -> int:
     log.info("Starting SmartChannelX (long polling)…")
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=False,
+        drop_pending_updates=True,   # Drop stale updates from previous sessions
     )
     return 0
 

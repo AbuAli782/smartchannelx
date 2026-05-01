@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS channels (
     name_filter_enabled INTEGER NOT NULL DEFAULT 0,
     name_filter_words TEXT,
     banned_words TEXT,
+    anti_spam_enabled INTEGER NOT NULL DEFAULT 0,
+    anti_link_enabled INTEGER NOT NULL DEFAULT 0,
+    join_filter_type INTEGER NOT NULL DEFAULT 0,
+    max_warnings INTEGER NOT NULL DEFAULT 0,
+    warn_action INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     FOREIGN KEY(owner_user_id) REFERENCES users(user_id)
 );
@@ -145,6 +150,15 @@ CREATE TABLE IF NOT EXISTS error_logs (
     created_at INTEGER NOT NULL,
     level TEXT NOT NULL,
     message TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_warnings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS events_log (
@@ -1357,3 +1371,31 @@ async def get_post_reactions_counts(post_id: int) -> dict[str, int]:
     ) as cur:
         rows = await cur.fetchall()
     return {r["reaction_name"]: r["cnt"] for r in rows}
+
+
+# ==================== 🛡️ User Warnings ====================
+
+async def add_user_warning(channel_id: int, user_id: int, reason: str | None = None) -> None:
+    conn = db()
+    await conn.execute(
+        "INSERT INTO user_warnings (channel_id, user_id, reason, created_at) VALUES (?, ?, ?, ?)",
+        (channel_id, user_id, reason, int(time.time()))
+    )
+    await conn.commit()
+
+async def get_user_warnings_count(channel_id: int, user_id: int) -> int:
+    conn = db()
+    async with conn.execute(
+        "SELECT COUNT(*) as count FROM user_warnings WHERE channel_id = ? AND user_id = ?",
+        (channel_id, user_id)
+    ) as cur:
+        row = await cur.fetchone()
+    return row["count"] if row else 0
+
+async def clear_user_warnings(channel_id: int, user_id: int) -> None:
+    conn = db()
+    await conn.execute(
+        "DELETE FROM user_warnings WHERE channel_id = ? AND user_id = ?",
+        (channel_id, user_id)
+    )
+    await conn.commit()

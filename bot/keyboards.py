@@ -465,14 +465,15 @@ def post_options_kb(lang: str, channel_id: int, post_id: int, has_buttons: bool 
         ],
         # Edit Post Components
         [
-            InlineKeyboardButton(t(lang, "btn_add_media"), callback_data=f"post:media:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_add_media"), callback_data=f"post:media:{channel_id}:{post_id}"),
             InlineKeyboardButton(
-                t(lang, "btn_edit_buttons") if has_buttons else t(lang, "btn_add_buttons"), 
-                callback_data=f"post:buttons:{channel_id}"
+                t(lang, "btn_edit_buttons") if has_buttons else t(lang, "btn_add_buttons"),
+                callback_data=f"post:buttons:{channel_id}:{post_id}"
             )
         ],
         # Settings & Save
         [InlineKeyboardButton(t(lang, "btn_advanced_settings"), callback_data=f"post:adv:{channel_id}")],
+        [InlineKeyboardButton(t(lang, "btn_preview_publish"), callback_data=f"post:preview:{channel_id}")],
         [InlineKeyboardButton(t(lang, "btn_save_draft"), callback_data=f"ch:open:{channel_id}")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -488,14 +489,18 @@ def preview_actions_kb(lang: str, channel_id: int, post_id: int) -> InlineKeyboa
     return InlineKeyboardMarkup(rows)
 
 
-def buttons_builder_menu_kb(lang: str, channel_id: int, post_id: int) -> InlineKeyboardMarkup:
+def buttons_builder_menu_kb(lang: str, channel_id: int, post_id: int | None) -> InlineKeyboardMarkup:
+    if post_id:
+        back_cb = f"post:back_to_options:{channel_id}:{post_id}"
+    else:
+        back_cb = f"post:back_to_options:{channel_id}"
     rows = [
-        [InlineKeyboardButton(t(lang, "btn_btnbuilder_wizard"), callback_data=f"btnbuild:start:{post_id}")],
+        [InlineKeyboardButton(t(lang, "btn_btnbuilder_wizard"), callback_data=f"btnbuild:start:{post_id or 0}")],
         [
-            InlineKeyboardButton(t(lang, "btn_btnbuilder_favs"), callback_data=f"btnbuild:favs:{post_id}"),
-            InlineKeyboardButton(t(lang, "btn_btnbuilder_clear"), callback_data=f"btnbuild:clear:{post_id}")
+            InlineKeyboardButton(t(lang, "btn_btnbuilder_favs"), callback_data=f"btnbuild:favs:{post_id or 0}"),
+            InlineKeyboardButton(t(lang, "btn_btnbuilder_clear"), callback_data=f"btnbuild:clear:{post_id or 0}")
         ],
-        _row_back_home_cancel(lang, back_cb=f"post:back_to_options:{channel_id}")
+        _row_back_home_cancel(lang, back_cb=back_cb)
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -687,24 +692,61 @@ def delete_timer_ask_kb(lang: str, rec_id: int) -> InlineKeyboardMarkup:
 
 
 def protection_menu_kb(lang: str, channel: dict) -> InlineKeyboardMarkup:
-    cap = t(lang, "state_on") if channel.get("captcha_enabled") else t(lang, "state_off")
-    bb = t(lang, "state_on") if channel.get("block_bots") else t(lang, "state_off")
+    anti_spam = t(lang, "state_on") if channel.get("anti_spam_enabled") else t(lang, "state_off")
+    anti_link = t(lang, "state_on") if channel.get("anti_link_enabled") else t(lang, "state_off")
     cid = channel["id"]
     rows = [
-        [InlineKeyboardButton(t(lang, "btn_captcha", state=cap), callback_data=f"prot:captcha:{cid}")],
-        [InlineKeyboardButton(t(lang, "btn_join_filters"), callback_data=f"prot:joinf:{cid}")],
-        [InlineKeyboardButton(t(lang, "btn_word_filter"), callback_data=f"prot:words:{cid}")],
-        [InlineKeyboardButton(t(lang, "btn_block_bots", state=bb), callback_data=f"prot:bots:{cid}")],
+        [InlineKeyboardButton(t(lang, "btn_prot_join_filters"), callback_data=f"prot:joinf:{cid}")],
+        [
+            InlineKeyboardButton(t(lang, "btn_prot_anti_links", state=anti_link), callback_data=f"prot:links:{cid}"),
+            InlineKeyboardButton(t(lang, "btn_prot_anti_spam", state=anti_spam), callback_data=f"prot:spam:{cid}")
+        ],
+        [
+            InlineKeyboardButton(t(lang, "btn_prot_banned_words"), callback_data=f"prot:words:{cid}"),
+            InlineKeyboardButton(t(lang, "btn_prot_punishments"), callback_data=f"prot:punish:{cid}")
+        ],
         _row_back_home_cancel(lang, back_cb=f"ch:open:{cid}"),
     ]
     return InlineKeyboardMarkup(rows)
 
-
-def join_filters_kb(lang: str, channel_id: int) -> InlineKeyboardMarkup:
+def protection_punishment_kb(lang: str, channel_id: int, max_warn: int, action: int) -> InlineKeyboardMarkup:
+    # Highlights the selected option
+    w1 = "🟢 " if max_warn == 1 else ""
+    w3 = "🟢 " if max_warn == 3 else ""
+    w5 = "🟢 " if max_warn == 5 else ""
+    
+    a1 = "🟢 " if action == 1 else ""
+    a2 = "🟢 " if action == 2 else ""
+    a3 = "🟢 " if action == 3 else ""
+    
     rows = [
-        [InlineKeyboardButton(t(lang, "btn_filter_total_ban"), callback_data=f"prot:jf:total:{channel_id}")],
-        [InlineKeyboardButton(t(lang, "btn_filter_multi_ban"), callback_data=f"prot:jf:multi:{channel_id}")],
+        [
+            InlineKeyboardButton(w1 + t(lang, "btn_prot_warn_1"), callback_data=f"prot:p:w:1:{channel_id}"),
+            InlineKeyboardButton(w3 + t(lang, "btn_prot_warn_3"), callback_data=f"prot:p:w:3:{channel_id}"),
+            InlineKeyboardButton(w5 + t(lang, "btn_prot_warn_5"), callback_data=f"prot:p:w:5:{channel_id}")
+        ],
+        [
+            InlineKeyboardButton(a1 + t(lang, "btn_prot_act_mute"), callback_data=f"prot:p:a:1:{channel_id}"),
+            InlineKeyboardButton(a2 + t(lang, "btn_prot_act_kick"), callback_data=f"prot:p:a:2:{channel_id}"),
+            InlineKeyboardButton(a3 + t(lang, "btn_prot_act_ban"), callback_data=f"prot:p:a:3:{channel_id}")
+        ],
+        _row_back_home_cancel(lang, back_cb=f"prot:menu:{channel_id}"),
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def join_filters_kb(lang: str, channel: dict) -> InlineKeyboardMarkup:
+    channel_id = channel["id"]
+    cap = t(lang, "state_on") if channel.get("captcha_enabled") else t(lang, "state_off")
+    bb = t(lang, "state_on") if channel.get("block_bots") else t(lang, "state_off")
+    rows = [
+        [InlineKeyboardButton(t(lang, "btn_captcha", state=cap), callback_data=f"prot:captcha:{channel_id}")],
+        [InlineKeyboardButton(t(lang, "btn_block_bots", state=bb), callback_data=f"prot:bots:{channel_id}")],
         [InlineKeyboardButton(t(lang, "btn_filter_names"), callback_data=f"prot:jf:names:{channel_id}")],
+        [
+            InlineKeyboardButton(t(lang, "btn_filter_total_ban"), callback_data=f"prot:jf:total:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_filter_multi_ban"), callback_data=f"prot:jf:multi:{channel_id}")
+        ],
         [InlineKeyboardButton(t(lang, "btn_filter_alphabet"), callback_data=f"prot:jf:alpha:{channel_id}")],
         _row_back_home_cancel(lang, back_cb=f"prot:menu:{channel_id}"),
     ]

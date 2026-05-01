@@ -118,20 +118,36 @@ async def msg_post_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     post_id = flow.get("post_id")
     if not post_id:
-        await msg.reply_text(t(lang, "err_generic"))
-        return True
+        # Auto-create draft post if not yet created
+        post_id = await db.create_post(
+            channel_id=channel_id,
+            created_by=user.id,
+            content_type=content_type,
+            text=text,
+        )
+        flow["post_id"] = post_id
+        await db.update_post_content(
+            post_id=post_id,
+            content_type=content_type,
+            text=text,
+            file_id=file_id,
+            caption=caption,
+        )
+    else:
+        await db.update_post_content(
+            post_id=post_id,
+            content_type=content_type,
+            text=text,
+            file_id=file_id,
+            caption=caption,
+        )
 
-    await db.update_post_content(
-        post_id=post_id,
-        content_type=content_type,
-        text=text,
-        file_id=file_id,
-        caption=caption,
-    )
     flow["name"] = "post_options"
+    post = await db.get_post(post_id)
+    has_buttons = bool(post and post.get("buttons"))
     await msg.reply_text(
         t(lang, "post_received"),
-        reply_markup=kb.post_options_kb(lang, channel_id, post_id),
+        reply_markup=kb.post_options_kb(lang, channel_id, post_id, has_buttons=has_buttons),
     )
     return True
 
@@ -140,10 +156,17 @@ async def cb_post_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     q = update.callback_query
     await q.answer()
     lang = await get_user_language(update)
-    channel_id = int(q.data.split(":")[2])
+    parts = q.data.split(":")
+    # Support both post:buttons:post_id and post:buttons:channel_id:post_id formats
+    channel_id = int(parts[2])
+    post_id_from_data = int(parts[3]) if len(parts) > 3 else None
     flow = context.user_data.get("flow") or {}
+    # Prefer post_id from callback data, fallback to flow
+    resolved_post_id = post_id_from_data or flow.get("post_id")
     flow["name"] = "post_buttons"
     flow["channel_id"] = channel_id
+    if resolved_post_id:
+        flow["post_id"] = resolved_post_id
     context.user_data["flow"] = flow
     await q.edit_message_text(
         t(lang, "buttons_prompt"),
@@ -180,9 +203,14 @@ async def cb_back_to_options(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q = update.callback_query
     await q.answer()
     lang = await get_user_language(update)
-    channel_id = int(q.data.split(":")[2])
+    parts = q.data.split(":")
+    channel_id = int(parts[2])
+    # Allow optional post_id in callback data: post:back_to_options:channel_id:post_id
+    post_id_from_cb = int(parts[3]) if len(parts) > 3 else None
     flow = context.user_data.get("flow") or {}
     flow["name"] = "post_options"
+    if post_id_from_cb:
+        flow["post_id"] = post_id_from_cb
     context.user_data["flow"] = flow
     post_id = flow.get("post_id")
     has_buttons = False
@@ -319,7 +347,13 @@ async def cb_post_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     post = await db.get_post(post_id)
     channel = await db.get_channel(channel_id)
-    if not post or not channel:
+    if not post:
+        await q.edit_message_text(t(lang, "err_generic"), reply_markup=kb.channel_main_menu_kb(lang, channel_id))
+        return
+    # If channel not found via channel_id, use post's channel
+    if not channel:
+        channel = await db.get_channel(post["channel_id"])
+    if not channel:
         return
     text = render_post_caption(post, channel)
     inline_rows = buttons_to_inline_rows(post.get("buttons"), post_id=post["id"])
@@ -386,24 +420,30 @@ async def cb_publish_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def cb_post_media_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """The 'Add media' button just nudges the user to send media."""
+    """The 'Add media' button just nudges the user to send new/replacement media."""
     q = update.callback_query
     await q.answer()
     lang = await get_user_language(update)
-    channel_id = int(q.data.split(":")[2])
-    await q.edit_message_text(
-        t(lang, "create_post_prompt"),
-        reply_markup=kb.back_home_only_kb(lang, back_cb=f"post:back_to_options:{channel_id}"),
-    )
+    parts = q.data.split(":")
+    channel_id = int(parts[2])
+    post_id_from_data = int(parts[3]) if len(parts) > 3 else None
     flow = context.user_data.get("flow") or {}
+    # Preserve the existing post_id so we replace content in the same post
+    existing_post_id = post_id_from_data or flow.get("post_id")
     flow["name"] = "new_post"
     flow["channel_id"] = channel_id
-    flow.pop("post_id", None)
+    if existing_post_id:
+        flow["post_id"] = existing_post_id
     context.user_data["flow"] = flow
+    back_cb = f"post:back_to_options:{channel_id}:{existing_post_id}" if existing_post_id else f"post:back_to_options:{channel_id}"
+    await q.edit_message_text(
+        t(lang, "create_post_prompt"),
+        reply_markup=kb.back_home_only_kb(lang, back_cb=back_cb),
+    )
 
 
 async def cb_post_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Edit the post: re-enter content."""
+    """Edit the post: re-enter content, preserving the same post record."""
     q = update.callback_query
     await q.answer()
     lang = await get_user_language(update)
@@ -412,11 +452,12 @@ async def cb_post_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not post:
         return
     channel_id = post["channel_id"]
-    flow = {"name": "new_post", "channel_id": channel_id}
+    # Preserve post_id so the content update goes to the right post
+    flow = {"name": "new_post", "channel_id": channel_id, "post_id": post_id}
     context.user_data["flow"] = flow
     await q.edit_message_text(
         t(lang, "create_post_prompt"),
-        reply_markup=kb.back_home_only_kb(lang, back_cb=f"ch:open:{channel_id}"),
+        reply_markup=kb.back_home_only_kb(lang, back_cb=f"post:back_to_options:{channel_id}:{post_id}"),
     )
 
 
@@ -467,9 +508,14 @@ async def cb_btnbuild_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await db.update_post_buttons(post_id, None)
     
     post = await db.get_post(post_id)
+    if not post:
+        await q.answer(t(lang, "err_generic"), show_alert=True)
+        return
     channel_id = post["channel_id"]
+    # Also update flow so post_id is not lost
+    context.user_data["flow"] = {"name": "post_options", "channel_id": channel_id, "post_id": post_id}
     await q.edit_message_text(
-        "✅ تم مسح الأزرار بنجاح.",
+        "✅ تم مسح الأزرار بنجاح." if context.user_data.get("lang", "ar") == "ar" else "✅ Buttons cleared.",
         reply_markup=kb.post_options_kb(lang, channel_id, post_id, has_buttons=False)
     )
 
@@ -496,9 +542,14 @@ async def cb_post_auto_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["flow"] = flow
     
     post = await db.get_post(post_id)
+    if not post:
+        await q.answer(t(lang, "err_generic"), show_alert=True)
+        return
+    channel_id = post["channel_id"]
+    back_cb = f"post:back_to_options:{channel_id}:{post_id}"
     await q.edit_message_text(
-        "🗑️ **التدمير الذاتي (حذف المنشور تلقائياً)**\n\nأرسل لي عدد الدقائق التي سيتم بعدها حذف المنشور من القناة. (مثال: 60 لحذفه بعد ساعة).\nأو أرسل 0 لإلغاء التدمير الذاتي.",
-        reply_markup=kb.back_home_only_kb(lang, back_cb=f"post:back_to_options:{post['channel_id']}"),
+        "🗑️ **التدمير الذاتي (حذف المنشور تلقائياً)**\n\nأرسل عدد الدقائق التي سيتم بعدها حذف المنشور.\n(مثال: `60` لحذفه بعد ساعة)\nأو أرسل `0` لإلغاء التدمير الذاتي.",
+        reply_markup=kb.back_home_only_kb(lang, back_cb=back_cb),
         parse_mode="Markdown"
     )
 
@@ -514,9 +565,14 @@ async def cb_post_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["flow"] = flow
     
     post = await db.get_post(post_id)
+    if not post:
+        await q.answer(t(lang, "err_generic"), show_alert=True)
+        return
+    channel_id = post["channel_id"]
+    back_cb = f"post:back_to_options:{channel_id}:{post_id}"
     await q.edit_message_text(
-        "💬 **رسالة الرد التلقائي**\n\nأرسل لي النص الذي تود أن يقوم البوت بإرساله كتعليق/رد على هذا المنشور فور نشره.\nأو أرسل `0` للإلغاء.",
-        reply_markup=kb.back_home_only_kb(lang, back_cb=f"post:back_to_options:{post['channel_id']}"),
+        "💬 **رسالة الرد التلقائي**\n\nأرسل النص الذي سيرده البوت كتعليق على هذا المنشور فور نشره.\nأو أرسل `0` للإلغاء.",
+        reply_markup=kb.back_home_only_kb(lang, back_cb=back_cb),
         parse_mode="Markdown"
     )
 
@@ -585,8 +641,10 @@ async def cb_post_crosspost(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def register(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_new_post, pattern=r"^post:new:\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_post_buttons, pattern=r"^post:buttons:\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_back_to_options, pattern=r"^post:back_to_options:\d+$"))
+    # Support both post:buttons:channel_id and post:buttons:channel_id:post_id
+    app.add_handler(CallbackQueryHandler(cb_post_buttons, pattern=r"^post:buttons:\d+(:\d+)?$"))
+    # Support both post:back_to_options:channel_id and post:back_to_options:channel_id:post_id
+    app.add_handler(CallbackQueryHandler(cb_back_to_options, pattern=r"^post:back_to_options:\d+(:\d+)?$"))
     app.add_handler(CallbackQueryHandler(cb_post_advanced, pattern=r"^post:adv:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_adv_toggle_sig, pattern=r"^post:adv_sig:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_adv_toggle_lp, pattern=r"^post:adv_lp:\d+$"))
@@ -597,7 +655,8 @@ def register(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_post_next_content, pattern=r"^post:next_content:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_post_preview, pattern=r"^post:preview:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_publish_now, pattern=r"^post:publish:\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_post_media_hint, pattern=r"^post:media:\d+$"))
+    # Support both post:media:channel_id and post:media:channel_id:post_id
+    app.add_handler(CallbackQueryHandler(cb_post_media_hint, pattern=r"^post:media:\d+(:\d+)?$"))
     app.add_handler(CallbackQueryHandler(cb_post_edit, pattern=r"^post:edit:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_btnbuild_clear, pattern=r"^btnbuild:clear:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_btnbuild_start, pattern=r"^btnbuild:start:\d+$"))
