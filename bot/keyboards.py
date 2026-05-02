@@ -16,6 +16,15 @@ def _row_back_home_cancel(lang: str, back_cb: str = "nav:back") -> list[InlineKe
     ]
 
 
+def back_home_only_kb(lang: str, back_cb: str = "nav:back") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(t(lang, "btn_back"), callback_data=back_cb),
+            InlineKeyboardButton(t(lang, "btn_home"), callback_data="nav:home"),
+        ]
+    ])
+
+
 def welcome_kb(lang: str) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(t(lang, "btn_add_channel"), callback_data="ch:add")],
@@ -62,8 +71,15 @@ def channels_list_kb(lang: str, channels: list[dict], statuses: dict[int, str] |
 
 def channel_main_menu_kb(lang: str, channel_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(t(lang, "btn_create_post"), callback_data=f"post:new:{channel_id}")],
-        [InlineKeyboardButton(t(lang, "btn_schedule_posts"), callback_data=f"sched:menu:{channel_id}")],
+        [InlineKeyboardButton(t(lang, "btn_dashboard"), callback_data=f"ch:dash:{channel_id}")],
+        [
+            InlineKeyboardButton(t(lang, "btn_create_post"), callback_data=f"post:new:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_schedule_posts"), callback_data=f"sched:menu:{channel_id}")
+        ],
+        [
+            InlineKeyboardButton(t(lang, "btn_automation"), callback_data=f"ch:auto:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_sync_engine"), callback_data=f"ch:sync:{channel_id}")
+        ],
         [
             InlineKeyboardButton(t(lang, "btn_protection"), callback_data=f"prot:menu:{channel_id}"),
             InlineKeyboardButton(t(lang, "btn_statistics"), callback_data=f"stat:menu:{channel_id}"),
@@ -73,26 +89,74 @@ def channel_main_menu_kb(lang: str, channel_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(t(lang, "btn_admins"), callback_data=f"adm:menu:{channel_id}"),
         ],
         [
-            InlineKeyboardButton(t(lang, "btn_events"), callback_data=f"ev:menu:{channel_id}"),
-            InlineKeyboardButton(t(lang, "btn_autocomplete"), callback_data=f"ac:menu:{channel_id}"),
-        ],
-        [
-            InlineKeyboardButton(t(lang, "btn_forwarding"), callback_data=f"fw:menu:{channel_id}"),
-            InlineKeyboardButton(t(lang, "btn_goodbye"), callback_data=f"gb:menu:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_monitoring"), callback_data=f"ch:health:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_advanced_op"), callback_data=f"ch:ops:{channel_id}"),
         ],
         [
             InlineKeyboardButton(t(lang, "btn_subscription"), callback_data=f"sub:menu:{channel_id}"),
-            InlineKeyboardButton(t(lang, "btn_verify_admin"), callback_data=f"ch:verify:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_events"), callback_data=f"ev:menu:{channel_id}"),
         ],
         [
-            InlineKeyboardButton(t(lang, "btn_channel_info"), callback_data=f"ch:info:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_verify_admin"), callback_data=f"ch:verify:{channel_id}"),
             InlineKeyboardButton(t(lang, "btn_refresh_channel"), callback_data=f"ch:refresh:{channel_id}"),
         ],
         [
-            InlineKeyboardButton(t(lang, "btn_delete_channel"), callback_data=f"ch:del_confirm:{channel_id}"),
             InlineKeyboardButton(t(lang, "btn_change_channel"), callback_data="ch:switch"),
-        ],
-        [InlineKeyboardButton(t(lang, "btn_home"), callback_data="nav:home")],
+            InlineKeyboardButton(t(lang, "btn_home"), callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(rows)
+
+def channel_enterprise_dashboard_kb(lang: str, channel_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(t(lang, "btn_ch_health_check"), callback_data=f"ch:run_health:{channel_id}")],
+        [InlineKeyboardButton(t(lang, "btn_ch_sync_now"), callback_data=f"ch:run_sync:{channel_id}")],
+        [InlineKeyboardButton(t(lang, "btn_ch_tags_categories"), callback_data=f"ch:tags:{channel_id}")],
+        [
+            InlineKeyboardButton(t(lang, "btn_back"), callback_data=f"ch:open:{channel_id}"),
+            InlineKeyboardButton(t(lang, "btn_home"), callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(rows)
+
+def channel_registry_kb(lang: str, channels: list[dict], page: int = 1, total_pages: int = 1, sort: str = "date") -> InlineKeyboardMarkup:
+    rows = []
+    
+    # Grid View - 2 columns
+    for i in range(0, len(channels), 2):
+        row = []
+        for ch in channels[i:i+2]:
+            title = ch.get("title") or ch.get("username") or str(ch["telegram_chat_id"])
+            if len(title) > 15: title = title[:12] + "..."
+            row.append(InlineKeyboardButton(f"📢 {title}", callback_data=f"ch:open:{ch['id']}"))
+        rows.append(row)
+        
+    # Pagination
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"ch:reg_page:{page-1}:{sort}"))
+    nav_row.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="ignore"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton("➡️", callback_data=f"ch:reg_page:{page+1}:{sort}"))
+    rows.append(nav_row)
+    
+    # Sorting & Filtering
+    sort_text = "🔄 أقدم" if sort == "date" else "🔄 أحدث"
+    rows.append([
+        InlineKeyboardButton(f"📊 الترتيب: {sort_text}", callback_data=f"ch:reg_sort:{sort}"),
+        InlineKeyboardButton("🔍 بحث", callback_data="ch:reg_search")
+    ])
+    
+    rows.append([InlineKeyboardButton(t(lang, "btn_add_channel"), callback_data="ch:add")])
+    rows.append([InlineKeyboardButton(t(lang, "btn_home"), callback_data="nav:home")])
+    return InlineKeyboardMarkup(rows)
+
+def channel_bulk_operations_kb(lang: str) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(t(lang, "btn_bulk_test"), callback_data="ch:bulk:test")],
+        [InlineKeyboardButton(t(lang, "btn_bulk_sync"), callback_data="ch:bulk:sync")],
+        [InlineKeyboardButton(t(lang, "btn_bulk_fix"), callback_data="ch:bulk:fix")],
+        [InlineKeyboardButton(t(lang, "btn_back"), callback_data="nav:home")]
     ]
     return InlineKeyboardMarkup(rows)
 

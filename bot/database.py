@@ -254,6 +254,50 @@ CREATE TABLE IF NOT EXISTS subscription_required (
     UNIQUE(channel_id, required_chat_ref)
 );
 
+CREATE TABLE IF NOT EXISTS channel_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channel_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    tag_name TEXT NOT NULL,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channel_health (
+    channel_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'online',
+    last_check INTEGER NOT NULL,
+    error_message TEXT,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channel_sync_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    sync_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    details TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channel_automation_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    trigger_type TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    action_payload TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_posts_channel ON posts(channel_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status, run_at);
@@ -290,7 +334,12 @@ async def init_db() -> None:
         "ALTER TABLE posts ADD COLUMN delete_after_minutes INTEGER;",
         "ALTER TABLE posts ADD COLUMN auto_reply_text TEXT;",
         "ALTER TABLE posts ADD COLUMN reactions_json TEXT;",
-        "ALTER TABLE posts ADD COLUMN crosspost_channels TEXT;"
+        "ALTER TABLE posts ADD COLUMN crosspost_channels TEXT;",
+        "ALTER TABLE channels ADD COLUMN custom_permissions TEXT;",
+        "ALTER TABLE channels ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;",
+        "ALTER TABLE channels ADD COLUMN filter_total_ban INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE channels ADD COLUMN filter_multi_ban INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE channels ADD COLUMN filter_alphabet_ban INTEGER NOT NULL DEFAULT 0;"
     ]
     for mig in migrations:
         try:
@@ -416,6 +465,8 @@ async def update_channel_field(channel_id: int, field: str, value: Any) -> None:
         "language", "timezone", "signature_text", "signature_enabled",
         "captcha_enabled", "block_bots", "notifications_enabled",
         "name_filter_enabled", "name_filter_words", "banned_words", "title", "username",
+        "anti_spam_enabled", "anti_link_enabled", "warn_action", "max_warnings",
+        "filter_total_ban", "filter_multi_ban", "filter_alphabet_ban", "is_active", "custom_permissions"
     }
     if field not in allowed:
         raise ValueError(f"Field {field} not allowed")

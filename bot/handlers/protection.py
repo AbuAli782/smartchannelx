@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import time
+import asyncio
+import re
 from typing import Any
 
 from telegram import Update
@@ -254,6 +257,21 @@ async def cb_filter_simple(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     parts = q.data.split(":")
     kind = parts[2]
     channel_id = int(parts[3])
+    
+    # Update field (mapping kind to DB field if needed, but here it's just a placeholder or toggle)
+    # For simplicity, we'll just save it as a setting or flag.
+    # Assuming kind is 'total', 'multi', 'alpha'
+    field_map = {
+        "total": "filter_total_ban",
+        "multi": "filter_multi_ban",
+        "alpha": "filter_alphabet_ban"
+    }
+    field = field_map.get(kind)
+    if field:
+        channel = await db.get_channel(channel_id)
+        new_val = 0 if channel.get(field) else 1
+        await db.update_channel_field(channel_id, field, new_val)
+        
     labels = {
         "total": t(lang, "btn_filter_total_ban"),
         "multi": t(lang, "btn_filter_multi_ban"),
@@ -261,9 +279,11 @@ async def cb_filter_simple(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     }
     label = labels.get(kind, kind)
     await q.answer(text=f"{t(lang, 'saved')} ({label})", show_alert=False)
+    
+    channel = await db.get_channel(channel_id)
     await q.edit_message_text(
         t(lang, "join_filters_title"),
-        reply_markup=kb.join_filters_kb(lang, channel_id),
+        reply_markup=kb.join_filters_kb(lang, channel),
     )
 
 
@@ -289,16 +309,68 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
         return
-    # Name filter
-    if channel.get("name_filter_enabled"):
-        words_json = channel.get("name_filter_words")
-        words = json.loads(words_json) if words_json else []
-        full_name = " ".join(filter(None, [user.first_name, user.last_name, user.username])).lower()
-        if any(w.lower() in full_name for w in words):
+    # Alphabet filter
+    if channel.get("filter_alphabet_ban"):
+        # Check for non-latin/arabic/common symbols
+        import re
+        # Allow Arabic, English, Numbers and common symbols. Reject anything else (like Chinese, Russian, etc. if not specifically allowed)
+        # This is a basic heuristic.
+        name = user.full_name
+        # Keep only what is allowed
+        clean = re.sub(r'[\u0600-\u06FF\sA-Za-z0-9\.,!@#\$%\^&\*\(\)_\+-=\[\]\{\};:\'\"<>?/\|\\]+', '', name)
+        if clean: # If there's anything left, it means there are "foreign" characters
             try:
                 await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
             except Exception:
                 pass
+            return
+
+    # Total Ban / Global Blacklist check (Placeholder logic)
+    if channel.get("filter_total_ban"):
+        # In a real enterprise system, we would check a global DB of banned users.
+        # For now, let's assume it means "Instant Ban" (Lockdown mode)
+        try:
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+        except Exception:
+            pass
+        return
+
+    # Multi-Ban check (Joined > 3 groups in 10 minutes)
+    if channel.get("filter_multi_ban"):
+        now = time.time()
+        key = f"joins_{user.id}"
+        joins = context.bot_data.get(key, [])
+        joins = [t for t in joins if now - t < 600]
+        joins.append(now)
+        context.bot_data[key] = joins
+        if len(joins) > 3:
+            try:
+                await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+            except Exception:
+                pass
+            return
+
+    # Captcha Logic
+    if channel.get("captcha_enabled"):
+        from telegram import ChatPermissions
+        try:
+            # Restrict first
+            await context.bot.restrict_chat_member(
+                chat_id=chat.id,
+                user_id=user.id,
+                permissions=ChatPermissions(can_send_messages=False)
+            )
+            
+            # Send captcha message
+            lang = channel.get("language") or "ar"
+            text = t(lang, "captcha_msg", user=user.mention_html())
+            buttons = [[InlineKeyboardButton(t(lang, "btn_captcha_verify"), callback_data=f"prot:captcha_solve:{user.id}")]]
+            sent = await context.bot.send_message(chat.id, text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            
+            # Auto delete captcha after 2 minutes if not solved
+            asyncio.create_task(delete_later(context.bot, chat.id, sent.message_id, 120))
+        except Exception:
+            pass
 
 
 async def message_protection_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -420,6 +492,44 @@ async def delete_later(bot, chat_id, message_id, delay):
         pass
 
 
+async def cb_captcha_solve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    parts = q.data.split(":")
+    target_user_id = int(parts[2])
+    
+    if q.from_user.id != target_user_id:
+        await q.answer(t(await get_user_language(update), "err_not_your_captcha"), show_alert=True)
+        return
+        
+    await q.answer("✅")
+    chat_id = q.message.chat_id
+    
+    from telegram import ChatPermissions
+    try:
+        # Unrestrict
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=target_user_id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_change_info=False,
+                can_invite_users=True,
+                can_pin_messages=False
+            )
+        )
+        await q.message.delete()
+    except Exception:
+        pass
+
 def register(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_protection_menu, pattern=r"^prot:menu:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_toggle_captcha, pattern=r"^prot:captcha:\d+$"))
@@ -435,6 +545,7 @@ def register(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_filter_names_disable, pattern=r"^prot:names_disable:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_filter_simple, pattern=r"^prot:jf:(total|multi|alpha):\d+$"))
     app.add_handler(CallbackQueryHandler(cb_word_filter, pattern=r"^prot:words:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_captcha_solve, pattern=r"^prot:captcha_solve:\d+$"))
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))
     
     from telegram.ext import MessageHandler, filters

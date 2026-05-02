@@ -10,6 +10,7 @@ from . import (
     admins,
     autocomplete,
     channels,
+    channels_enterprise,
     child_bots,
     developer,
     events,
@@ -67,6 +68,7 @@ async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         child_bots.msg_token,
         subscription.msg_add,
         subscription.msg_check,
+        channels_enterprise.msg_add_channel_tag,
     )
     for h in flow_handlers:
         try:
@@ -83,6 +85,7 @@ async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def register_all(app: Application) -> None:
     start.register(app)
     channels.register(app)
+    channels_enterprise.register(app)
     posts.register(app)
     schedule.register(app)
     recurring.register(app)
